@@ -58,6 +58,13 @@ function addXp(n) {
   if (S.lastDay !== d) { S.streak = S.lastDay === d - 1 ? S.streak + 1 : 1; S.lastDay = d; }
   save(); paintTop();
 }
+const weekNum = () => Math.floor((dayNum() + 3) / 7); // Pazartesi başlangıçlı hafta
+function act(lang = S.lang) {
+  const L = S.L[lang], w = weekNum();
+  if (!L.act || L.act.w !== w) L.act = { w, prev: L.act && L.act.w === w - 1 ? { ...L.act, prev: undefined } : null };
+  return L.act;
+}
+function bump(kind) { const a = act(); a[kind] = (a[kind] || 0) + 1; save(); }
 const streakNow = () => (S.lastDay >= dayNum() - 1 ? S.streak : 0);
 
 // ───────────────────────── ses ─────────────────────────
@@ -97,6 +104,20 @@ function beep(ok) {
     o.start(t); o.stop(t + .3);
   } catch (e) {}
 }
+
+// APK içinde: Android'in kendi konuşma tanıması (WebView'de Web Speech API yok)
+class NativeSR {
+  start() { NativeSR.cur = this; window.AndroidSR.start(this.lang || 'en-US'); }
+  stop() { window.AndroidSR.stop(); }
+  abort() { NativeSR.cur = null; window.AndroidSR.stop(); }
+}
+window.__sr = (type, data) => {
+  const r = NativeSR.cur; if (!r) return;
+  if (type === 'result') r.onresult && r.onresult({ results: [data.map(t => ({ transcript: t }))] });
+  else if (type === 'error') r.onerror && r.onerror({ error: data });
+  else if (type === 'end') { NativeSR.cur = null; r.onend && r.onend(); }
+};
+const getSR = () => (window.AndroidSR ? NativeSR : window.SpeechRecognition || window.webkitSpeechRecognition);
 
 // ───────────────────────── kelime havuzları / SRS ─────────────────────────
 const byLevel = l => WORDS.filter(w => w.l === l);
@@ -174,7 +195,7 @@ $('#langseg').addEventListener('click', e => {
 let session = null;
 function endSession() { if (session) { session.kill(); session = null; } document.body.classList.remove('in-session'); }
 
-function runSession({ title, steps, back = 'home', srs = false, noRetry = false, silent = false, xpEach = 10, bonus = 0, onDone }) {
+function runSession({ title, steps, back = 'home', srs = false, noRetry = false, silent = false, xpEach = 10, bonus = 0, onDone, onStep, kind }) {
   endSession(); stopAudio();
   steps = steps.slice();
   let i = 0, ok = 0, n = 0, alive = true, cleanup = null;
@@ -210,6 +231,7 @@ function runSession({ title, steps, back = 'home', srs = false, noRetry = false,
         if (srs && st.it && st.it.cat && !graded.has(st.it.id)) { graded.add(st.it.id); grade(st.it, good); save(); }
         if (!good && !noRetry && !st.retry) steps.push({ ...st, retry: true });
         if (st.onAnswer) st.onAnswer(good);
+        if (onStep) onStep(st, good);
         put(foot, h('div', { class: 'fb ' + (good ? 'good' : 'bad') },
           h('b', null, good ? pick(['Doğru! 🎉', 'Harika! ✨', 'Süper! 👏', 'Aynen öyle! ✅']) : 'Olmadı'),
           info.correct && h('div', { class: 'ans' }, 'Doğrusu: ', info.correct, S.lang === 'ka' && info.tlit !== false ? tl(info.correct) : null),
@@ -224,6 +246,7 @@ function runSession({ title, steps, back = 'home', srs = false, noRetry = false,
     barI.style.width = '100%';
     const res = { ok, n, pct: n ? Math.round(ok / n * 100) : 100 };
     if (bonus) addXp(bonus);
+    if (kind) bump(kind);
     if (silent) { onDone && onDone(res); return; }
     const extra = onDone ? onDone(res) : null;
     count.textContent = '';
@@ -376,7 +399,7 @@ R.speak = (st, ctx) => {
   const it = st.it, t = tw(it);
   const out = h('div', { class: 'heard' });
   const mic = h('button', { class: 'mic', title: 'Konuş' }, '🎤');
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const SR = getSR();
   let rec = null, tries = 0;
   const fallback = () => {
     mic.remove();
@@ -447,7 +470,7 @@ function startLesson() {
   if (sp) steps.push({ type: 'speak', it: sp });
   if (ss[2] && P().level >= 2) steps.push({ type: 'speak', it: ss[2] });
   runSession({
-    title: 'Günün dersi · ' + LANGS[S.lang].name, steps, srs: true, bonus: 50,
+    title: 'Günün dersi · ' + LANGS[S.lang].name, steps, srs: true, bonus: 50, kind: 'lesson',
     onDone: () => { P().lessonDay = dayNum(); save(); return h('p', { class: 'center' }, `Bugün ${news.length} yeni kelime öğrendin, ${due.length} kelimeyi tekrar ettin.`); }
   });
 }
@@ -455,38 +478,46 @@ function startReview() {
   let due = sample(dueWords(), 15);
   if (!due.length) due = sample(learned(), 10);
   if (!due.length) return startLesson();
-  runSession({ title: 'Tekrar zamanı', steps: due.map(reviewStep), srs: true, bonus: 20 });
+  runSession({ title: 'Tekrar zamanı', steps: due.map(reviewStep), srs: true, bonus: 20, kind: 'review' });
 }
 
 // ───────────────────────── haftalık seviye testi ─────────────────────────
 function testBlock(l) {
   const ws = sample(byLevel(l), 4), ss = sample(SENTENCES.filter(s => s.l === l), 3);
+  const sp = sample(byLevel(l).filter(w => canSpell(w) && !ws.includes(w)), 1)[0];
   return shuffle([
     { type: 'word2tr', it: ws[0] }, { type: 'word2tr', it: ws[1] }, { type: 'pic2word', it: ws[2] }, { type: 'listen', it: ws[3] },
-    { type: 'sentListen', it: ss[0] }, { type: 'sentMeaning', it: ss[1] }, { type: 'build', it: ss[2] }
+    { type: 'sentListen', it: ss[0] }, { type: 'sentMeaning', it: ss[1] }, { type: 'build', it: ss[2] },
+    sp ? { type: 'spell', it: sp } : { type: 'sentMeaning', it: ss[0] }
   ]);
 }
 function startTest() {
-  const detail = [];
+  const detail = [], sk = {}, miss = [];
+  const onStep = (st, good) => {
+    const k = SKILL_OF[st.type]; if (!k) return;
+    sk[k] = sk[k] || [0, 0]; sk[k][1]++; if (good) sk[k][0]++;
+    if (!good && st.it && st.it.cat && !miss.includes(st.it.id)) miss.push(st.it.id);
+  };
   const runLevel = l => {
     runSession({
-      title: `Seviye testi · ${LV[l]} bölümü (${l}/4)`, steps: testBlock(l), noRetry: true, silent: true, xpEach: 5, back: 'home',
+      title: `Seviye testi · ${LV[l]} bölümü (${l}/4)`, steps: testBlock(l), noRetry: true, silent: true, xpEach: 5, back: 'home', onStep,
       onDone: res => {
         detail.push({ l, ok: res.ok, n: res.n });
         const passed = res.ok / res.n >= 0.7;
-        if (passed && l < 4) runLevel(l + 1); else finishTest(detail, passed && l === 4);
+        if (passed && l < 4) runLevel(l + 1); else finishTest(detail, passed && l === 4, sk, miss);
       }
     });
   };
   runLevel(1);
 }
-function finishTest(detail, allPassed) {
+function finishTest(detail, allPassed, sk, miss) {
   const p = P(), prev = p.tests[p.tests.length - 1];
   const failed = detail.find(d => d.ok / d.n < 0.7);
   const level = failed ? failed.l : 4;
   const tot = detail.reduce((a, d) => a + d.ok, 0), cnt = detail.reduce((a, d) => a + d.n, 0);
   const score = Math.round(detail.reduce((a, d) => a + d.ok / d.n, 0) / 4 * 100); // 4 bölüm üzerinden genel puan
-  p.tests.push({ t: Date.now(), level, score, detail, top: allPassed });
+  miss.forEach(id => { p.srs[id] = { b: 1, d: dayNum() }; }); // kaçırılan kelimeler tekrar kutusuna
+  p.tests.push({ t: Date.now(), level, score, detail, top: allPassed, sk, miss });
   p.level = level; p.placed = true; p.lastTest = Date.now();
   addXp(100); save();
   endSession(); document.body.classList.add('in-session');
@@ -500,7 +531,8 @@ function finishTest(detail, allPassed) {
       h('p', { class: 'mut', style: 'margin-top:8px' }, `Genel puan: ${score}/100 · ${tot}/${cnt} doğru`,
         diff == null ? '' : diff > 0 ? ` · geçen teste göre +${diff} 📈` : diff < 0 ? ` · geçen teste göre ${diff}` : ' · geçen testle aynı')),
     h('div', { class: 'card' }, h('h3', null, 'Bu hafta için planın'), h('ul', { style: 'margin:6px 0 0;padding-left:20px' }, plan(level).map(x => h('li', null, x)))),
-    h('button', { class: 'btn block', onclick: () => { endSession(); go('home'); } }, 'Ana sayfaya dön'));
+    h('button', { class: 'btn block', style: 'margin-bottom:10px', onclick: () => { endSession(); go('yorum'); } }, '💬 Koçun yorumunu gör'),
+    h('button', { class: 'btn ghost block', onclick: () => { endSession(); go('home'); } }, 'Ana sayfaya dön'));
   window.scrollTo(0, 0);
 }
 function plan(level) {
@@ -553,6 +585,7 @@ V.home = () => {
     h('a', { class: 'tile', href: '#listen' }, h('span', { class: 'ic' }, '🎧'), h('b', null, 'Podcast & Dinleme'), h('small', null, 'Kulağını alıştır')),
     h('button', { class: 'tile', onclick: () => startSpeak('sent') }, h('span', { class: 'ic' }, '🎤'), h('b', null, 'Konuşma'), h('small', null, 'Mikrofona söyle'))));
 
+  nodes.push(h('a', { class: 'item', href: '#yorum', style: 'margin-bottom:12px' }, h('span', { class: 'ic' }, '💬'), h('span', { class: 'grow' }, h('b', null, 'Koçun yorumu'), h('small', null, p.tests.length ? 'Son testine göre sana özel öneriler' : 'İlk testten sonra kişisel öneriler burada')), h('span', { class: 'chev' }, '›')));
   const pool = lw.length ? lw : WORDS, wod = pool[dayNum() % pool.length], t = tw(wod);
   nodes.push(h('div', { class: 'card' }, h('div', { class: 'mut', style: 'font-weight:700' }, 'GÜNÜN KELİMESİ'),
     h('div', { class: 'row', style: 'margin-top:6px' }, h('span', { style: 'font-size:46px' }, wod.e),
@@ -591,13 +624,13 @@ function startWrite(kind) {
   if (kind === 'word') steps = sample(gamePool().filter(w => [...tw(w)].length <= 14), 8).map(w => ({ type: 'type', it: w }));
   else if (kind === 'dict') steps = sample(sentsUpTo(lv).filter(s => s.l >= lv - 1), 6).map(s => ({ type: 'type', it: s, dict: true }));
   else steps = sample(sentsUpTo(lv).filter(s => s.l >= lv - 1 && tw(s).includes(' ')), 6).map(s => ({ type: 'build', it: s }));
-  runSession({ title: { word: 'Kelime yaz', dict: 'Dikte', build: 'Cümle kur' }[kind], steps, back: 'learn', srs: kind === 'word', bonus: 20 });
+  runSession({ title: { word: 'Kelime yaz', dict: 'Dikte', build: 'Cümle kur' }[kind], steps, back: 'learn', srs: kind === 'word', bonus: 20, kind: 'write' });
 }
 function startSpeak(kind) {
   const lv = P().level;
   const steps = kind === 'word' ? sample(gamePool(), 8).map(w => ({ type: 'speak', it: w }))
     : sample(sentsUpTo(lv).filter(s => s.l >= lv - 1), 6).map(s => ({ type: 'speak', it: s }));
-  runSession({ title: 'Konuşma pratiği', steps, back: 'learn', noRetry: true, bonus: 20 });
+  runSession({ title: 'Konuşma pratiği', steps, back: 'learn', noRetry: true, bonus: 20, kind: 'speak' });
 }
 
 V.words = () => {
@@ -628,7 +661,7 @@ V.abc = () => {
     const unknown = ALPHABET.filter(a => !(p.abc[a.ch] >= 2)), base = unknown.length >= 6 ? sample(unknown, 6) : sample(ALPHABET, 6);
     const steps = shuffle([...base.map(a => ({ type: 'abc', a })), ...sample(ALPHABET, 4).map(a => ({ type: 'abc', a, rev: true }))])
       .map(s => ({ ...s, onAnswer: ok => { if (ok) { p.abc[s.a.ch] = (p.abc[s.a.ch] || 0) + 1; save(); } } }));
-    runSession({ title: 'Alfabe testi', steps, back: 'abc', bonus: 20 });
+    runSession({ title: 'Alfabe testi', steps, back: 'abc', bonus: 20, kind: 'abc' });
   };
   page('Gürcü alfabesi', 'learn',
     h('div', { class: 'ctrl' }, h('button', { class: 'btn small', onclick: quiz }, '▶ Alfabe testi'), h('span', { class: 'mut', style: 'align-self:center' }, Object.keys(p.abc).length + '/33 harf tanındı')),
@@ -659,7 +692,7 @@ V.story = id => {
     for (let k = 0; k < s.lines.length; k++) { if (my !== token) return; sel(s.lines[k], spans[k], false); const ok = await say(tw(s.lines[k])); if (!ok || my !== token) return; }
   };
   const quiz = () => runSession({
-    title: s.title, back: 'read', noRetry: true, bonus: 30,
+    title: s.title, back: 'read', noRetry: true, bonus: 30, kind: 'read',
     steps: s.q.map(q => ({ type: 'q', label: 'Okuduğunu anlama', ...q })),
     onDone: () => { P().done['s:' + s.id] = 1; save(); }
   });
@@ -686,7 +719,7 @@ V.games = () => {
 function gameSession(type, title) {
   let pool = gamePool();
   if (type === 'spell') pool = pool.filter(canSpell);
-  runSession({ title, steps: sample(pool, 10).map(w => ({ type, it: w })), back: 'games', srs: false, bonus: 20 });
+  runSession({ title, steps: sample(pool, 10).map(w => ({ type, it: w })), back: 'games', srs: false, bonus: 20, kind: 'game' });
 }
 function gameMemory() {
   const ws = sample(gamePool().filter(w => [...tw(w)].length <= 14), 6);
@@ -704,7 +737,7 @@ function gameMemory() {
     const [a, b] = open;
     if (a.w === b.w) {
       a.done = b.done = true; a.el.classList.add('done'); b.el.classList.add('done'); open = []; matched++; beep(true);
-      if (matched === 6) { const xp = Math.max(15, 60 - moves * 3); addXp(xp); grid.after(h('div', { class: 'card center', style: 'margin-top:12px' }, h('h3', null, `🎉 ${moves} hamlede bitti! +${xp} XP`), h('button', { class: 'btn', style: 'margin-top:8px', onclick: gameMemory }, 'Tekrar oyna'))); }
+      if (matched === 6) { const xp = Math.max(15, 60 - moves * 3); addXp(xp); bump('game'); grid.after(h('div', { class: 'card center', style: 'margin-top:12px' }, h('h3', null, `🎉 ${moves} hamlede bitti! +${xp} XP`), h('button', { class: 'btn', style: 'margin-top:8px', onclick: gameMemory }, 'Tekrar oyna'))); }
     } else { lock = true; setTimeout(() => { a.el.classList.remove('open'); b.el.classList.remove('open'); open = []; lock = false; }, 900); }
   };
   cards.forEach(c => {
@@ -730,7 +763,7 @@ function gameSpeed() {
   const end = () => {
     clearInterval(speedTimer);
     const rec = score > (P().hi || 0); if (rec) P().hi = score;
-    addXp(score * 3); save();
+    addXp(score * 3); bump('game');
     put(stage, h('div', { class: 'done-emoji' }, rec ? '🏆' : '⚡'), h('h1', { class: 'center' }, score + ' doğru'),
       h('p', { class: 'center mut' }, `${wrong} yanlış · rekorun: ${P().hi}${rec ? ' (yeni rekor!)' : ''} · +${score * 3} XP`),
       h('button', { class: 'btn block', style: 'margin-top:14px', onclick: gameSpeed }, 'Tekrar oyna'));
@@ -773,7 +806,7 @@ V.dlg = id => {
       if (!ok || my !== token) break;
       await new Promise(r => setTimeout(r, 350));
     }
-    if (my === token) { playBtn.textContent = '▶ Dinle'; token++; P().done['d:' + d.id] = 1; save(); }
+    if (my === token) { playBtn.textContent = '▶ Dinle'; token++; P().done['d:' + d.id] = 1; bump('listen'); }
   };
   playBtn.onclick = () => { if (playBtn.textContent.startsWith('⏹')) { token++; stopAudio(); playBtn.textContent = '▶ Dinle'; } else play(); };
   const tog = (label, cls, on) => { const b = h('button', { class: 'btn small ghost' }, label + (on ? ': açık' : ': kapalı')); b.onclick = () => { const hid = list.classList.toggle(cls); b.textContent = label + (hid ? ': kapalı' : ': açık'); }; return b; };
@@ -782,8 +815,8 @@ V.dlg = id => {
     h('div', { class: 'ctrl' }, lvBadge(d.l), playBtn, rateBtn, tog('Metin', 'hide-text', true), tog('Çeviri', 'hide-tr', false)),
     list,
     h('div', { class: 'row wrap' },
-      h('button', { class: 'btn grow', onclick: () => runSession({ title: d.title, back: 'listen', noRetry: true, bonus: 30, steps: d.q.map(q => ({ type: 'q', label: 'Dinlediğini anlama', ...q })), onDone: () => { P().done['d:' + d.id] = 1; save(); } }) }, 'Soruları çöz'),
-      h('button', { class: 'btn ghost grow', onclick: () => runSession({ title: 'Sesli tekrar · ' + d.title, back: 'dlg/' + d.id, noRetry: true, bonus: 30, steps: d.lines.map(l => ({ type: 'speak', it: l, voice: l.s === 'A' ? 'f' : 'm' })) }) }, '🎤 Sesli tekrar')));
+      h('button', { class: 'btn grow', onclick: () => runSession({ title: d.title, back: 'listen', noRetry: true, bonus: 30, kind: 'listen', steps: d.q.map(q => ({ type: 'q', label: 'Dinlediğini anlama', ...q })), onDone: () => { P().done['d:' + d.id] = 1; save(); } }) }, 'Soruları çöz'),
+      h('button', { class: 'btn ghost grow', onclick: () => runSession({ title: 'Sesli tekrar · ' + d.title, back: 'dlg/' + d.id, noRetry: true, bonus: 30, kind: 'speak', steps: d.lines.map(l => ({ type: 'speak', it: l, voice: l.s === 'A' ? 'f' : 'm' })) }) }, '🎤 Sesli tekrar')));
 };
 function closePlayer() { const p = $('#player'); p.hidden = true; put(p, ); document.body.classList.remove('has-player'); }
 function openPlayer(title, url) {
@@ -794,7 +827,7 @@ function openPlayer(title, url) {
   sp.onclick = () => { ri = (ri + 1) % rates.length; au.playbackRate = rates[ri]; sp.textContent = rates[ri] + '×'; };
   put(p, h('div', { class: 'row', style: 'margin-bottom:4px' }, h('span', { class: 'pt' }, title), sp, h('button', { class: 'btn small ghost', onclick: closePlayer }, '✕')), au);
   p.hidden = false; document.body.classList.add('has-player');
-  addXp(5);
+  addXp(5); bump('listen');
 }
 V.pod = k => {
   const p = PODCASTS[+k]; if (!p) return go('listen');
@@ -826,7 +859,8 @@ V.me = () => {
       h('div', { class: 'stat' }, h('b', null, Object.keys(S.L.en.srs).length + Object.keys(S.L.ka.srs).length), h('small', null, 'toplam kelime'))),
       h('div', { class: 'bars' }, days.map(d => { const v = S.log[d] || 0; return h('div', null, h('b', null, v || ''), h('i', { style: `height:${v / mx * 78}%` }), dn[new Date((d + .5) * 864e5).getUTCDay()]); }))),
     langCard('en'), langCard('ka'),
-    h('button', { class: 'btn block', onclick: startTest }, `📝 ${LANGS[S.lang].name} seviye testini şimdi yap`),
+    h('a', { class: 'btn block', style: 'margin-bottom:10px', href: '#yorum' }, '💬 Koçun yorumu ve öneriler'),
+    h('button', { class: 'btn ghost block', onclick: startTest }, `📝 ${LANGS[S.lang].name} seviye testini şimdi yap`),
     h('h2', { class: 'sec' }, 'Ayarlar'),
     h('div', { class: 'card' },
       h('div', { class: 'trow' }, h('span', { class: 'grow' }, 'Günlük yeni kelime'), (() => { const s = h('select', { onchange: e => { S.set.newPerDay = +e.target.value; save(); } }, [5, 8, 12, 15, 20].map(n => h('option', { value: n, selected: n === S.set.newPerDay }, n))); return s; })()),
@@ -836,12 +870,142 @@ V.me = () => {
       h('div', { class: 'trow' }, h('span', { class: 'grow' }, 'Tüm ilerlemeyi sıfırla'), h('button', { class: 'btn small ghost', style: 'color:var(--bad)', onclick: () => { if (confirm('Tüm ilerleme silinecek. Emin misin?')) { localStorage.removeItem(KEY); S = load(); paintTop(); route(); } } }, 'Sıfırla'))));
 };
 
+// ── koç yorumu: test sonuçlarına ve haftalık çalışmaya göre kişisel öneriler
+const SKILL_OF = { word2tr: 'kelime', pic2word: 'kelime', listen: 'dinleme', sentListen: 'dinleme', sentMeaning: 'okuma', build: 'yazma', spell: 'yazma', type: 'yazma' };
+const SKILLS = {
+  kelime: { n: 'Kelime bilgisi', i: '🖼️',
+    weak: 'Testte kelimelerin anlamını bulmakta zorlandın. Seviyeni en çok kelime hazinen belirliyor.',
+    how: ['Her gün “Günün dersi”ni atlamadan yap; yeni kelimede resme bak, sesi dinle ve kelimeyi 3 kez sesli söyle.',
+      '“Tekrar” kutusunu her gün sıfırla. Kelime tam unutulmak üzereyken tekrar edilince kalıcı olur.',
+      'Günde 5 dakika “Eşleştirme” veya “Resim Quiz” oyna: resim–kelime bağı ezberden hızlı çalışır.'],
+    btn: ['Günün dersine başla', () => startLesson()] },
+  dinleme: { n: 'Dinleme', i: '🎧',
+    weak: 'Kelimeyi yazılı görünce tanıyorsun ama duyunca kaçırıyorsun. Kulağının sese alışması gerekiyor.',
+    how: ['Mini diyalogları 3 adımda dinle: önce metin kapalı, sonra metin açık, en son yavaş hızda sesli tekrar.',
+      'Her gün 1 diyalog + 1 tur “Dinle & Bul” oyunu yap.',
+      'Seviyene uygun podcast’ten haftada 2 bölüm dinle. Hepsini anlamasan da kulağın ritme alışır.'],
+    btn: ['Dinleme bölümüne git', () => go('listen')] },
+  okuma: { n: 'Okuma', i: '📖',
+    weak: 'Yazılı cümlelerin anlamını çıkarmakta zorlandın.',
+    how: ['Okuma metinlerinde önce çeviriye bakmadan tüm metni oku, sonra yalnızca anlamadığın cümlelere dokun.',
+      'Haftada en az 2 metni bitir ve sorularını çöz.',
+      'Aynı metni ertesi gün bir kez daha oku: ikinci okumada hız iki katına çıkar.'],
+    btn: ['Okuma metinlerine git', () => go('read')] },
+  yazma: { n: 'Yazma ve cümle kurma', i: '✍️',
+    weak: 'Kelimeleri tanıyorsun ama kendin yazarken ve cümle kurarken hata yapıyorsun.',
+    how: ['Her gün 5 dakika “Dikte” yap: duyduğunu yazmak hem kulağı hem yazımı geliştirir.',
+      '“Cümle kur” ile kelime sırasını oturt; yanlış yaptığın cümleyi bir kez de sesli söyle.',
+      '“Harf Avı” oyunu kelimenin yazılışını pekiştirir; yanlış yazdığın kelimeyi 3 kez doğru yaz.'],
+    btn: ['Dikte çalış', () => startWrite('dict')] }
+};
+function coach() {
+  const p = P(), T = p.tests, last = T[T.length - 1], prev = T[T.length - 2], a = act(), out = [];
+  const card = (ic, title, ...body) => h('div', { class: 'card' }, h('h3', null, ic + ' ' + title), body);
+  const para = t => h('p', { style: 'margin-top:6px' }, t);
+  const steps = arr => h('ol', { style: 'margin:8px 0 0;padding-left:22px' }, arr.map(x => h('li', { style: 'margin-bottom:4px' }, x)));
+  const name = LANGS[S.lang].name;
+
+  if (!last) {
+    out.push(card('👋', 'Henüz test olmadın',
+      para(`Sana özel yorum yapabilmem için önce ${name} seviye testini çözmen gerekiyor. Test yaklaşık 5 dakika sürer; zorlandığın bölümde kendiliğinden biter.`),
+      para('Testten sonra burada hangi becerinin zayıf olduğunu, neyi nasıl çalışman gerektiğini ve haftalık hedeflerini göreceksin.'),
+      h('button', { class: 'btn', style: 'margin-top:10px', onclick: startTest }, 'Teste başla')));
+  } else {
+    // 1) genel durum
+    const failed = last.detail.find(d => d.ok / d.n < 0.7);
+    let gen = `Son testte (${new Date(last.t).toLocaleDateString('tr-TR')}) seviyen ${LV[last.level]} (${LVNAME[last.level]}) çıktı, genel puanın ${last.score}/100.`;
+    if (last.top) gen += ' B2 bölümünü de geçtin; artık hedefin gerçek içerikle (podcast, haber, kitap) akıcılık kazanmak.';
+    else if (failed) {
+      const need = Math.ceil(failed.n * 0.7);
+      gen += ` ${LV[failed.l]} bölümünde ${failed.ok}/${failed.n} yaptın; bir üst seviyeye geçmek için ${need} doğru gerekiyor` + (need - failed.ok <= 2 ? ` — sadece ${need - failed.ok} soru uzaktasın!` : '.');
+    }
+    out.push(card('🎓', 'Genel durumun', para(gen)));
+
+    // 2) gidişat
+    if (prev) {
+      const d = last.score - prev.score, lvUp = last.level - prev.level;
+      const days = Math.max(1, Math.round((last.t - prev.t) / 864e5));
+      let tr;
+      if (lvUp > 0) tr = `Tebrikler! ${days} günde ${LV[prev.level]} seviyesinden ${LV[last.level]} seviyesine çıktın (puan ${prev.score} → ${last.score}). Şu anki çalışma düzenin işe yarıyor, aynen devam et.`;
+      else if (d >= 5) tr = `İlerliyorsun: puanın ${prev.score} → ${last.score} (+${d}). Seviye henüz değişmedi ama doğru yoldasın; aşağıdaki zayıf beceriye odaklanırsan bir sonraki testte seviye atlayabilirsin.`;
+      else if (d <= -5) tr = `Puanın düştü: ${prev.score} → ${last.score} (${d}). Bu genelde tekrarların aksadığını gösterir. Bu hafta yeni kelime sayısını azalt (Ayarlar → 5 kelime) ve önce bekleyen tekrarları bitir.`;
+      else tr = `Puanın neredeyse aynı kaldı (${prev.score} → ${last.score}). Yerinde sayıyorsun; aynı şeyleri tekrar etmek yerine aşağıda belirttiğim zayıf beceriyi çalışman gerekiyor.`;
+      if (T.length >= 3) { const f = T[T.length - 3]; tr += ` Son üç test: ${f.score} → ${prev.score} → ${last.score}.`; }
+      out.push(card(d >= 5 || lvUp > 0 ? '📈' : d <= -5 ? '📉' : '➡️', 'Gidişat', para(tr)));
+    } else {
+      out.push(card('🧭', 'Gidişat', para('Bu ilk testin; karşılaştırma için bir hafta sonraki testi bekliyorum. O zaman ilerleyip ilerlemediğini net söyleyebileceğim.')));
+    }
+
+    // 3) beceri analizi
+    if (last.sk && Object.keys(last.sk).length) {
+      const rows = Object.keys(SKILLS).filter(k => last.sk[k] && last.sk[k][1]).map(k => ({ k, ok: last.sk[k][0], n: last.sk[k][1], pct: last.sk[k][0] / last.sk[k][1] }));
+      rows.sort((x, y) => x.pct - y.pct);
+      const weak = rows[0], strong = rows[rows.length - 1];
+      out.push(card('📊', 'Beceri karnen',
+        rows.slice().sort((x, y) => Object.keys(SKILLS).indexOf(x.k) - Object.keys(SKILLS).indexOf(y.k)).map(r => h('div', { class: 'trow' }, h('span', { style: 'width:150px' }, SKILLS[r.k].i + ' ' + SKILLS[r.k].n),
+          h('div', { class: 'grow' }, h('div', { class: 'meter', style: 'margin:0' }, h('i', { style: `width:${r.pct * 100}%;background:${r.pct >= .7 ? 'var(--good)' : r.pct >= .4 ? 'var(--gold)' : 'var(--bad)'}` }))), h('b', null, `${r.ok}/${r.n}`))),
+        rows.length > 1 && strong.pct > weak.pct ? para(`En güçlü yanın: ${SKILLS[strong.k].n}. En çok geliştirmen gereken: ${SKILLS[weak.k].n}.`) : para('Becerilerin dengeli görünüyor.')));
+      if (weak.pct < 0.85) {
+        const sk = SKILLS[weak.k];
+        const extra = S.lang === 'ka' && weak.k === 'okuma' ? ['Harfleri hâlâ yavaş çözüyorsan her gün “Alfabe testi” yap; hızlanınca Ayarlar’dan Latin okunuşu kapat.'] : [];
+        out.push(card(sk.i, 'Öncelikli çalışman gereken: ' + sk.n, para(sk.weak), h('p', { style: 'margin-top:8px;font-weight:700' }, 'Bunu şöyle yapman gerekir:'), steps([...sk.how, ...extra]),
+          h('button', { class: 'btn', style: 'margin-top:10px', onclick: sk.btn[1] }, sk.btn[0])));
+        const second = rows[1];
+        if (second && second.pct < 0.6 && second.k !== weak.k) out.push(card(SKILLS[second.k].i, 'İkinci öncelik: ' + SKILLS[second.k].n, para(SKILLS[second.k].weak), steps(SKILLS[second.k].how.slice(0, 2))));
+      } else {
+        out.push(card('🌟', 'Bu seviyede güçlüsün', para(`Testteki tüm becerilerde %85 ve üzerindesin. ${last.top ? 'Gerçek podcast’ler ve konuşma pratiğiyle akıcılığını artır.' : 'Bir sonraki testte üst seviye bölümünü geçmek için o seviyenin kelimelerini öğrenmeye başla.'}`)));
+      }
+    } else {
+      out.push(card('📊', 'Beceri karnen', para('Bu test eski sürümde çözüldüğü için beceri dökümü yok. Bir sonraki testten sonra kelime, dinleme, okuma ve yazma puanlarını ayrı ayrı göreceksin.'),
+        h('button', { class: 'btn small', style: 'margin-top:8px', onclick: startTest }, 'Testi şimdi tekrar çöz')));
+    }
+
+    // 4) kaçırılan kelimeler
+    const miss = (last.miss || []).map(id => WORDS.find(w => w.id === id)).filter(Boolean);
+    if (miss.length) {
+      out.push(card('🎯', 'Testte kaçırdığın kelimeler', para('Bu kelimeleri tekrar kutuna ekledim. Dokunup dinleyebilir, sonra hepsini birden çalışabilirsin.'),
+        h('div', { class: 'wgrid', style: 'margin-top:10px' }, miss.map(w => h('button', { class: 'wcard', style: 'box-shadow:inset 0 0 0 1px var(--line)', onclick: () => say(tw(w)) }, h('span', { class: 'em' }, w.e), h('b', null, tw(w), tl(tw(w))), h('small', null, w.tr)))),
+        h('button', { class: 'btn', style: 'margin-top:10px', onclick: () => runSession({ title: 'Kaçırdığın kelimeler', back: 'yorum', srs: true, bonus: 20, kind: 'review', steps: shuffle(miss).flatMap(w => [{ type: 'word2tr', it: w }, { type: canSpell(w) ? 'spell' : 'pic2word', it: w }]) }) }, 'Bu kelimeleri çalış')));
+    }
+  }
+
+  // 5) çalışma alışkanlığı (bu hafta)
+  const d0 = dayNum(), activeDays = [...Array(7)].filter((_, k) => S.log[d0 - k]).length, due = dueWords().length, nLearn = learned().length;
+  const hab = [];
+  if (activeDays >= 6) hab.push(`Son 7 günün ${activeDays}’inde çalıştın — harika bir düzen. Dil öğrenmede en önemli şey bu süreklilik.`);
+  else if (activeDays >= 3) hab.push(`Son 7 günün ${activeDays}’inde çalıştın. Fena değil, ama her gün 10 dakika, haftada 3 gün 30 dakikadan çok daha etkili. Hedefin: 7 günde 6 gün.`);
+  else hab.push(`Son 7 günde yalnızca ${activeDays} gün çalıştın. Bu tempoyla öğrendiklerin bir sonraki çalışmaya kadar unutuluyor. Telefonuna her gün aynı saate 10 dakikalık bir alarm kur ve sadece “Günün dersi”ni yap.`);
+  if (due > 30) hab.push(`${due} kelime tekrar bekliyor; birikmiş. Bu hafta yeni kelime öğrenmeyi durdur, önce tekrarları erit (günde 2 tur “Tekrar”).`);
+  else if (due > 0) hab.push(`${due} kelime bugün tekrar bekliyor. Yeni derse başlamadan önce bunları bitir.`);
+  if (nLearn) hab.push(`Toplam ${nLearn} kelime öğrendin, bunların ${mastered()} tanesi kalıcı hafızaya geçti.`);
+  const missing = [];
+  if (!a.speak) missing.push(['konuşma', 'Bu hafta hiç konuşma pratiği yapmadın. Konuşmadan konuşmayı öğrenemezsin: günde 5 cümleyi mikrofona söyle; puanın %75’i geçene kadar tekrar et.']);
+  if (!a.listen) missing.push(['dinleme', 'Bu hafta hiç diyalog ya da podcast dinlemedin. En az 3 mini diyalog dinle.']);
+  if (!a.read) missing.push(['okuma', 'Bu hafta hiç okuma metni çözmedin. Bir metin sadece 3 dakikanı alır.']);
+  if (!a.write) missing.push(['yazma', 'Bu hafta hiç yazma çalışmadın. “Dikte” ile başla.']);
+  missing.forEach(m => hab.push(m[1]));
+  if (S.lang === 'ka' && Object.keys(p.abc).length < 33) hab.push(`Gürcü alfabesinden ${Object.keys(p.abc).length}/33 harfi tanıyorsun. Alfabe bitmeden okuma ve yazma hızlanmaz; her gün bir “Alfabe testi” çöz.`);
+  out.push(card('🗓️', 'Çalışma düzenin', h('ul', { style: 'margin:8px 0 0;padding-left:20px' }, hab.map(x => h('li', { style: 'margin-bottom:5px' }, x)))));
+
+  // 6) bu haftanın hedefleri
+  const lv = p.level, goals = [
+    ['Günün dersi', a.lesson || 0, 6], ['Konuşma pratiği', a.speak || 0, 5], ['Dinleme (diyalog/podcast)', a.listen || 0, lv >= 3 ? 4 : 3],
+    ['Okuma metni', a.read || 0, 2], ['Yazma çalışması', a.write || 0, 3], ['Oyun', a.game || 0, 4]
+  ];
+  out.push(card('✅', 'Bu haftanın hedefleri', h('p', { class: 'mut' }, 'Hafta Pazartesi başlar. Hepsini tamamlarsan bir sonraki testte farkı görürsün.'),
+    goals.map(g => h('div', { class: 'trow' }, h('span', { style: 'width:22px' }, g[1] >= g[2] ? '✅' : '⬜'), h('span', { class: 'grow' }, g[0]),
+      h('div', { style: 'width:70px' }, h('div', { class: 'meter', style: 'margin:0' }, h('i', { style: `width:${Math.min(100, g[1] / g[2] * 100)}%` }))), h('b', { style: 'width:42px;text-align:right' }, `${Math.min(g[1], 99)}/${g[2]}`)))));
+  if (last && !testDue()) out.push(h('p', { class: 'hint' }, `Yorum her testten sonra yenilenir. Sonraki test: ${Math.ceil((p.lastTest + WEEK - Date.now()) / 864e5)} gün sonra.`));
+  return out;
+}
+
 // kısayol rotaları
+V.yorum = () => page('Koçun yorumu · ' + LANGS[S.lang].name, 'me', coach());
 V.lesson = startLesson; V.test = startTest; V.review = startReview;
 V.memory = gameMemory; V.speed = gameSpeed;
 
 // ───────────────────────── yönlendirme ─────────────────────────
-const TABS = { home: 'home', learn: 'learn', words: 'learn', cat: 'learn', abc: 'learn', read: 'learn', story: 'learn', games: 'games', memory: 'games', speed: 'games', listen: 'listen', dlg: 'listen', pod: 'listen', me: 'me' };
+const TABS = { home: 'home', learn: 'learn', words: 'learn', cat: 'learn', abc: 'learn', read: 'learn', story: 'learn', games: 'games', memory: 'games', speed: 'games', listen: 'listen', dlg: 'listen', pod: 'listen', me: 'me', yorum: 'me' };
 function route() {
   endSession(); stopAudio(); clearInterval(speedTimer);
   const raw = location.hash.slice(1) || 'home', ix = raw.indexOf('/');

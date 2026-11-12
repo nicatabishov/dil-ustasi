@@ -1,5 +1,5 @@
 // Dil Ustası servis çalışanı: kabuk dosyaları ağ-öncelikli, sesler önbellek-öncelikli.
-const V = 'du-v1';
+const V = 'du-v2';
 const SHELL = ['./', 'index.html', 'css/style.css', 'js/util.js', 'js/data-words.js', 'js/data-content.js', 'js/podcasts.js', 'js/app.js', 'manifest.webmanifest', 'icons/icon-192.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(V).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => {
