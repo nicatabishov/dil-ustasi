@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Dil Ustası — İngilizce & Gürcüce</title>
+<meta name="description" content="İngilizce ve Gürcüce: günlük kelimeler, oyunlar, podcast, konuşma ve haftalık seviye testi.">
+<meta name="theme-color" content="#2563eb">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header id="top">
+  <a class="brand" href="#home"><span class="logo">D</span><b>Dil Ustası</b></a>
+  <div class="seg" id="langseg">
+    <button data-lang="en">İngilizce</button>
+    <button data-lang="ka">Gürcüce</button>
+  </div>
+  <div class="streak" id="streak" title="Günlük seri">🔥 0</div>
+</header>
+<main id="view"></main>
+<div id="player" hidden></div>
+<nav id="nav">
+  <a href="#home" data-tab="home"><i>🏠</i>Ana Sayfa</a>
+  <a href="#learn" data-tab="learn"><i>📚</i>Öğren</a>
+  <a href="#games" data-tab="games"><i>🎮</i>Oyunlar</a>
+  <a href="#listen" data-tab="listen"><i>🎧</i>Dinle</a>
+  <a href="#me" data-tab="me"><i>📈</i>Gelişim</a>
+</nav>
+<script src="js/util.js"></script>
+<script src="js/data-words.js"></script>
+<script src="js/data-content.js"></script>
+<script src="js/podcasts.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
