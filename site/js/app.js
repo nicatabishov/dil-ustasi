@@ -120,9 +120,18 @@ window.__sr = (type, data) => {
 const getSR = () => (window.AndroidSR ? NativeSR : window.SpeechRecognition || window.webkitSpeechRecognition);
 
 // ───────────────────────── kelime havuzları / SRS ─────────────────────────
-const byLevel = l => WORDS.filter(w => w.l === l);
-const learned = () => WORDS.filter(w => P().srs[w.id]);
-const dueWords = () => { const d = dayNum(); return WORDS.filter(w => P().srs[w.id] && P().srs[w.id].d <= d); };
+let _wk = '', _wv = [];
+function W() {
+  const p = P(), k = S.lang + '|' + (p.mine ? p.mine.length : 0) + '|' + p.level;
+  if (k !== _wk) {
+    _wk = k;
+    _wv = globalThis['WOR' + 'DS'].filter(w => w[S.lang]).concat((p.mine || []).map(m => ({ id: 'm:' + m.w, e: '📌', tr: m.tr, [S.lang]: m.w, cat: 'Benim kelimelerim', l: p.level, mine: true })));
+  }
+  return _wv;
+}
+const byLevel = l => W().filter(w => w.l === l);
+const learned = () => W().filter(w => P().srs[w.id]);
+const dueWords = () => { const d = dayNum(); return W().filter(w => P().srs[w.id] && P().srs[w.id].d <= d); };
 const mastered = (lang = S.lang) => Object.values(S.L[lang].srs).filter(s => s.b >= 4).length;
 function newWords(n) {
   const lv = P().level, order = [lv];
@@ -135,16 +144,17 @@ function newWords(n) {
 function grade(w, ok) {
   const srs = P().srs, s = srs[w.id] || (srs[w.id] = { b: 0, d: 0 });
   s.b = ok ? Math.min(6, s.b + 1) : 1;
+  if (!ok) s.x = (s.x || 0) + 1;
   s.d = dayNum() + BOX_DAYS[s.b];
 }
 function gamePool(min = 12) {
   const l = learned();
   if (l.length >= min) return l;
   const lv = P().level;
-  return WORDS.filter(w => w.l <= lv);
+  return W().filter(w => w.l <= lv);
 }
 function distract(w, n, pool) {
-  pool = pool || WORDS.filter(x => Math.abs(x.l - w.l) <= 1);
+  pool = pool || W().filter(x => Math.abs(x.l - w.l) <= 1);
   const out = [], seen = new Set([w.tr, tw(w)]), seenE = new Set([w.e]);
   for (const x of shuffle(pool)) {
     if (seen.has(x.tr) || seen.has(tw(x)) || seenE.has(x.e)) continue;
@@ -283,6 +293,7 @@ R.intro = (st, ctx) => {
   ctx.body.append(h('div', { class: 'q' }, 'Yeni kelime'),
     h('div', { class: 'prompt' }, h('div', { class: 'em' }, w.e), h('div', { class: 'tw' }, t, tl(t)), h('div', { class: 'tr' }, w.tr),
       h('div', null, spk(t), spk(t, { rate: .7 }))),
+    exampleBox(w),
     h('p', { class: 'hint' }, 'Resme bak, sesi dinle ve yüksek sesle tekrar et.'));
   ctx.foot.append(h('button', { class: 'btn block', onclick: () => ctx.next() }, 'Anladım →'));
   say(t);
@@ -483,8 +494,8 @@ function startReview() {
 
 // ───────────────────────── haftalık seviye testi ─────────────────────────
 function testBlock(l) {
-  const ws = sample(byLevel(l), 4), ss = sample(SENTENCES.filter(s => s.l === l), 3);
-  const sp = sample(byLevel(l).filter(w => canSpell(w) && !ws.includes(w)), 1)[0];
+  const ws = sample(byLevel(l).filter(w => !w.only && !w.mine), 4), ss = sample(SENTENCES.filter(s => s.l === l), 3);
+  const sp = sample(byLevel(l).filter(w => !w.only && !w.mine && canSpell(w) && !ws.includes(w)), 1)[0];
   return shuffle([
     { type: 'word2tr', it: ws[0] }, { type: 'word2tr', it: ws[1] }, { type: 'pic2word', it: ws[2] }, { type: 'listen', it: ws[3] },
     { type: 'sentListen', it: ss[0] }, { type: 'sentMeaning', it: ss[1] }, { type: 'build', it: ss[2] },
@@ -586,7 +597,8 @@ V.home = () => {
     h('button', { class: 'tile', onclick: () => startSpeak('sent') }, h('span', { class: 'ic' }, '🎤'), h('b', null, 'Konuşma'), h('small', null, 'Mikrofona söyle'))));
 
   nodes.push(h('a', { class: 'item', href: '#yorum', style: 'margin-bottom:12px' }, h('span', { class: 'ic' }, '💬'), h('span', { class: 'grow' }, h('b', null, 'Koçun yorumu'), h('small', null, p.tests.length ? 'Son testine göre sana özel öneriler' : 'İlk testten sonra kişisel öneriler burada')), h('span', { class: 'chev' }, '›')));
-  const pool = lw.length ? lw : WORDS, wod = pool[dayNum() % pool.length], t = tw(wod);
+  nodes.push(h('a', { class: 'item', href: '#ai', style: 'margin-bottom:12px' }, h('span', { class: 'ic' }, '🤖'), h('span', { class: 'grow' }, h('b', null, 'Yapay zekâ ile sohbet'), h('small', null, 'Gerçek konuşmaya en yakın pratik: sahne seç, yaz ya da konuş')), h('span', { class: 'chev' }, '›')));
+  const pool = lw.length ? lw : W(), wod = pool[dayNum() % pool.length], t = tw(wod);
   nodes.push(h('div', { class: 'card' }, h('div', { class: 'mut', style: 'font-weight:700' }, 'GÜNÜN KELİMESİ'),
     h('div', { class: 'row', style: 'margin-top:6px' }, h('span', { style: 'font-size:46px' }, wod.e),
       h('div', { class: 'grow' }, h('div', { style: 'font-size:22px;font-weight:800' }, t, tl(t)), h('div', { class: 'mut' }, wod.tr)), spk(t))));
@@ -604,8 +616,17 @@ V.learn = () => {
     h('div', { class: 'list' },
       h('button', { class: 'item', onclick: startLesson }, h('span', { class: 'ic' }, '📘'), h('span', { class: 'grow' }, h('b', null, 'Günün dersi'), h('small', null, 'Yeni kelimeler + tekrar + cümle + konuşma')), h('span', { class: 'chev' }, '›')),
       h('button', { class: 'item', onclick: startReview }, h('span', { class: 'ic' }, '🔁'), h('span', { class: 'grow' }, h('b', null, 'Aralıklı tekrar'), h('small', null, dueWords().length + ' kelime bugün tekrar bekliyor')), h('span', { class: 'chev' }, '›')),
-      item('🖼️', 'Resimli sözlük', `${WORDS.length} kelime · ${learned().length} öğrenildi`, '#words'),
+      item('🖼️', 'Resimli sözlük', `${W().length} kelime · ${learned().length} öğrenildi`, '#words'),
       S.lang === 'ka' ? item('🔤', 'Gürcü alfabesi', Object.keys(p.abc).length + '/33 harf öğrenildi', '#abc') : null),
+    h('h2', { class: 'sec' }, 'Yapay zekâ'),
+    h('div', { class: 'list' },
+      item('🤖', 'Sohbet partneri', 'Restoran, iş görüşmesi, otel… yaz ya da konuş, hataların düzeltilsin', '#ai'),
+      item('📝', 'Günün yazı görevi', 'Kısa paragraf yaz; düzeltilmiş ve daha doğal halini gör', '#yaz')),
+    h('h2', { class: 'sec' }, 'Dilbilgisi ve kalıplar'),
+    h('div', { class: 'list' },
+      item('⚠️', S.lang === 'en' ? 'Türklere özel tuzaklar' : 'Gürcücede dikkat edilecekler', (TRAPS[S.lang] || []).filter(t => p.done['t:' + t.id]).length + '/' + (TRAPS[S.lang] || []).length + ' konu tamamlandı', '#traps'),
+      item('🧩', S.lang === 'en' ? 'Phrasal verb ve kalıplar' : 'Günlük kalıp ifadeler', W().filter(w => w.only).length + ' ifade, örnek cümleleriyle', '#cat/' + encodeURIComponent((W().find(w => w.only) || {}).cat || '')),
+      hardWords().length ? h('button', { class: 'item', onclick: startHard }, h('span', { class: 'ic' }, '🎯'), h('span', { class: 'grow' }, h('b', null, 'Zorlandığın kelimeler'), h('small', null, hardWords().length + ' kelimede sık hata yapıyorsun; bunlara özel çalış')), h('span', { class: 'chev' }, '›')) : null),
     h('h2', { class: 'sec' }, 'Okuma'),
     h('div', { class: 'list' }, item('📖', 'Okuma metinleri', 'Cümleye dokun: çeviri + ses. Sonra soruları çöz.', '#read')),
     h('h2', { class: 'sec' }, 'Yazma'),
@@ -634,19 +655,19 @@ function startSpeak(kind) {
 }
 
 V.words = () => {
-  const cats = [...new Set(WORDS.map(w => w.cat))];
+  const cats = [...new Set(W().map(w => w.cat))];
   page('Resimli sözlük', 'learn', h('div', { class: 'list' }, cats.map(c => {
-    const ws = WORDS.filter(w => w.cat === c), k = ws.filter(w => P().srs[w.id]).length, g = WORD_DATA.find(x => x.c === c);
+    const ws = W().filter(w => w.cat === c), k = ws.filter(w => P().srs[w.id]).length, g = WORD_DATA.find(x => x.c === c) || { i: '📌', l: P().level };
     return item(g.i, c, `${k}/${ws.length} öğrenildi`, '#cat/' + encodeURIComponent(c), h('span', { class: 'row' }, lvBadge(g.l), h('span', { class: 'chev' }, '›')));
   })));
 };
 V.cat = c => {
-  const ws = WORDS.filter(w => w.cat === c);
+  const ws = W().filter(w => w.cat === c);
   if (!ws.length) return go('words');
   page(c, 'words',
     h('div', { class: 'ctrl' }, h('button', { class: 'btn small', onclick: () => runSession({ title: c, steps: shuffle(ws).slice(0, 12).flatMap(w => [{ type: 'pic2word', it: w, pool: ws.length >= 6 ? ws : null }]), back: 'cat/' + encodeURIComponent(c), srs: false, bonus: 10 }) }, '▶ Bu konuda alıştırma')),
     h('div', { class: 'wgrid' }, ws.map(w => h('button', { class: 'wcard' + (P().srs[w.id] ? ' learned' : ''), onclick: () => say(tw(w)) },
-      h('span', { class: 'em' }, w.e), h('b', null, tw(w), tl(tw(w))), h('small', null, w.tr)))));
+      h('span', { class: 'em' }, w.e), h('b', null, tw(w), tl(tw(w))), h('small', null, w.tr), w.ex ? h('small', { style: 'margin-top:4px;font-style:italic' }, w.ex) : null))));
 };
 
 V.abc = () => {
@@ -684,7 +705,7 @@ V.story = id => {
   const sel = (l, sp, play) => {
     if (play) token++;
     spans.forEach(x => x.classList.remove('cur')); sp.classList.add('cur');
-    put(trbox, S.lang === 'ka' && S.set.translit ? h('div', { class: 'mut', style: 'font-style:italic' }, translit(l.ka)) : null, h('div', null, l.tr));
+    put(trbox, S.lang === 'ka' && S.set.translit ? h('div', { class: 'mut', style: 'font-style:italic' }, translit(l.ka)) : null, h('div', null, l.tr), wordChips(tw(l)));
     return play ? say(tw(l)) : null;
   };
   const playAll = async () => {
@@ -986,7 +1007,7 @@ function coach() {
     }
 
     // 4) kaçırılan kelimeler
-    const miss = (last.miss || []).map(id => WORDS.find(w => w.id === id)).filter(Boolean);
+    const miss = (last.miss || []).map(id => W().find(w => w.id === id)).filter(Boolean);
     if (miss.length) {
       out.push(card('🎯', 'Testte kaçırdığın kelimeler', para('Bu kelimeleri tekrar kutuna ekledim. Dokunup dinleyebilir, sonra hepsini birden çalışabilirsin.'),
         h('div', { class: 'wgrid', style: 'margin-top:10px' }, miss.map(w => h('button', { class: 'wcard', style: 'box-shadow:inset 0 0 0 1px var(--line)', onclick: () => say(tw(w)) }, h('span', { class: 'em' }, w.e), h('b', null, tw(w), tl(tw(w))), h('small', null, w.tr)))),
@@ -1024,13 +1045,232 @@ function coach() {
   return out;
 }
 
+// ── yapay zekâ istemcisi
+const AI_URL = 'https://nicatabishov--2aa53ab2df4d11f190a31607ee4eb77e.web.val.run';
+async function aiCall(op, body) {
+  if (!S.aiCode) throw new Error('kod');
+  let r;
+  try {
+    r = await fetch(AI_URL, { method: 'POST', headers: { 'content-type': 'application/json', 'x-code': S.aiCode }, body: JSON.stringify({ op, lang: S.lang, level: P().level, ...body }) });
+  } catch (e) { throw new Error('ag'); }
+  if (r.status === 401) { S.aiCode = ''; save(); throw new Error('kod'); }
+  if (r.status === 429) throw new Error('limit');
+  if (!r.ok) throw new Error('ai');
+  return r.json();
+}
+const aiMsg = e => ({ kod: 'Yapay zekâ kodu gerekli ya da hatalı.', limit: 'Bugünkü yapay zekâ kullanım sınırına ulaşıldı. Yarın tekrar dene.', ag: 'İnternet bağlantısı yok gibi görünüyor.', ai: 'Yapay zekâ şu an yanıt veremedi. Biraz sonra tekrar dene.' }[e.message] || 'Bir hata oluştu.');
+function aiGate(onOk) {
+  const inp = h('input', { class: 'tin', type: 'text', placeholder: 'Kod (6 karakter)', autocomplete: 'off', autocapitalize: 'characters', maxlength: '12', style: 'text-transform:uppercase;letter-spacing:3px;text-align:center' });
+  const msg = h('p', { class: 'hint' });
+  const btn = h('button', { class: 'btn block' }, 'Kaydet');
+  btn.onclick = async () => {
+    const c = inp.value.trim().toUpperCase(); if (!c) return;
+    btn.disabled = true; msg.textContent = 'Kontrol ediliyor…';
+    S.aiCode = c;
+    try { await aiCall('ping', {}); save(); onOk(); }
+    catch (e) { S.aiCode = ''; save(); msg.textContent = e.message === 'kod' ? 'Kod hatalı.' : aiMsg(e); btn.disabled = false; }
+  };
+  return h('div', { class: 'card' }, h('h3', null, '🔑 Yapay zekâ kodu'),
+    h('p', { class: 'mut', style: 'margin-bottom:10px' }, 'Yapay zekâ özellikleri (sohbet partneri, yazı düzeltme, kelime açıklama) kişisel bir kodla çalışır. Kodu bu cihaza bir kez girmen yeterli.'), inp, btn, msg);
+}
+function kaKeys(inp) {
+  const kb = h('div', { class: 'kbd' });
+  const ins = c => { const a = inp.selectionStart ?? inp.value.length, b = inp.selectionEnd ?? a; inp.value = inp.value.slice(0, a) + c + inp.value.slice(b); inp.focus(); inp.selectionStart = inp.selectionEnd = a + c.length; };
+  [...KA_LETTERS].forEach(c => kb.append(h('button', { onclick: () => ins(c) }, c)));
+  kb.append(h('button', { class: 'wide', onclick: () => ins(' ') }, 'boşluk'), h('button', { class: 'wide', onclick: () => { inp.value = [...inp.value].slice(0, -1).join(''); inp.focus(); } }, '⌫'));
+  return kb;
+}
+
+// ── kelime açıklama + kendi kelime listem
+function dictGet(k) { try { return (JSON.parse(localStorage.getItem('du.dict')) || {})[k]; } catch (e) { return null; } }
+function dictSet(k, v) { try { const d = JSON.parse(localStorage.getItem('du.dict')) || {}; d[k] = v; const ks = Object.keys(d); if (ks.length > 600) delete d[ks[0]]; localStorage.setItem('du.dict', JSON.stringify(d)); } catch (e) {} }
+async function lookupWord(word, sentence) {
+  const n = core(word);
+  const loc = W().find(w => core(tw(w)) === n);
+  if (loc) return { base: tw(loc), tr: loc.tr, ex: loc.ex || '', exTr: loc.exTr || '', known: true };
+  const k = S.lang + '|' + n, c = dictGet(k);
+  if (c) return c;
+  const r = await aiCall('word', { word, sentence });
+  if (r && r.tr) dictSet(k, r);
+  return r;
+}
+function addMine(base, tr) {
+  const p = P();
+  if (W().some(w => core(tw(w)) === core(base))) return false;
+  p.mine = p.mine || []; p.mine.push({ w: base, tr });
+  p.srs['m:' + base] = { b: 0, d: dayNum() };
+  save(); return true;
+}
+function wordChips(sentence) {
+  const toks = [...new Set(sentence.split(/\s+/).map(t => t.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '')).filter(Boolean))];
+  const res = h('div', { style: 'margin-top:8px' });
+  const show = async (t, chip) => {
+    [...chip.parentNode.children].forEach(c => c.classList.remove('sel')); chip.classList.add('sel');
+    put(res, h('span', { class: 'mut' }, 'Bakılıyor…'));
+    try {
+      const r = await lookupWord(t, sentence);
+      const base = r.base || t, has = W().some(w => core(tw(w)) === core(base));
+      const add = h('button', { class: 'btn small' + (has ? ' ghost' : ''), disabled: has, style: 'margin-top:8px' }, has ? '✓ Kelime listende' : '➕ Listeme ekle');
+      add.onclick = () => { if (addMine(base, r.tr)) { add.textContent = '✓ Eklendi — tekrarlarda karşına çıkacak'; add.disabled = true; } };
+      put(res, h('div', null, h('b', { style: 'font-size:18px' }, base), tl(base), ' — ', h('b', null, r.tr), r.pos ? h('span', { class: 'mut' }, ' (' + r.pos + ')') : null),
+        r.ex ? h('div', { class: 'mut', style: 'margin-top:4px' }, '“' + r.ex + '” — ' + r.exTr) : null, add);
+    } catch (e) {
+      put(res, h('span', { class: 'mut' }, e.message === 'kod' ? 'Bu kelime sözlükte yok. Yapay zekâ ile açıklamak için ' : aiMsg(e)), e.message === 'kod' ? h('a', { href: '#ai', style: 'color:var(--acc);font-weight:700' }, 'kodu gir') : null);
+    }
+  };
+  return h('div', { style: 'margin-top:10px;border-top:1px solid var(--line);padding-top:8px' }, h('div', { class: 'mut', style: 'font-size:12.5px;margin-bottom:6px' }, 'Kelimeye dokun: anlamını gör, listene ekle'),
+    h('div', { class: 'pool', style: 'justify-content:flex-start;gap:6px' }, toks.map(t => { const c = h('button', { class: 'chip sm' }, t); c.onclick = () => show(t, c); return c; })), res);
+}
+function exampleBox(w) {
+  const box = h('div', { class: 'card', style: 'text-align:center' });
+  const fill = (ex, exTr) => put(box, h('div', { class: 'mut', style: 'font-size:12px;font-weight:700' }, 'ÖRNEK CÜMLE'), h('div', { style: 'font-size:17.5px;font-weight:700;margin-top:4px' }, ex, tl(ex)), h('div', { class: 'mut' }, exTr), spk(ex));
+  if (w.ex) { fill(w.ex, w.exTr); return box; }
+  if (w.mine) return null;
+  const k = S.lang + '|' + core(tw(w)), c = dictGet(k);
+  if (c && c.ex) { fill(c.ex, c.exTr); return box; }
+  const b = h('button', { class: 'btn small ghost' }, '💡 Örnek cümle göster');
+  b.onclick = async () => {
+    b.disabled = true; b.textContent = 'Hazırlanıyor…';
+    try { const r = await aiCall('word', { word: tw(w) }); if (r.ex) { dictSet(k, r); fill(r.ex, r.exTr); } else throw new Error('ai'); }
+    catch (e) { put(box, h('span', { class: 'mut' }, e.message === 'kod' ? 'Örnek cümleler yapay zekâ ile üretilir. Öğren → Yapay zekâ bölümünden kodu gir.' : aiMsg(e))); }
+  };
+  box.append(b); return box;
+}
+
+// ── yapay zekâ: sohbet partneri
+V.ai = () => {
+  if (!S.aiCode) return page('Yapay zekâ', 'learn', aiGate(() => route()));
+  page('Yapay zekâ ile pratik', 'learn',
+    h('p', { class: 'mut', style: 'margin:0 4px 10px' }, `Bir sahne seç ve ${LANGS[S.lang].name} yaz ya da konuş. Yapay zekâ ${LV[P().level]} seviyene göre cevap verir, hatalarını düzeltir ve nedenini Türkçe açıklar.`),
+    h('div', { class: 'list' }, item('📝', 'Günün yazı görevi', 'Kısa bir paragraf yaz; düzeltilmiş ve daha doğal halini gör', '#yaz')),
+    h('h2', { class: 'sec' }, 'Sohbet sahneleri'),
+    h('div', { class: 'list' }, SCENARIOS.map(s => item(s.e, s.t, s.s, '#chat/' + s.id))));
+};
+V.chat = id => {
+  const sc = SCENARIOS.find(s => s.id === id);
+  if (!sc || !S.aiCode) return go('ai');
+  const hist = [], log = h('div', { class: 'dl' });
+  let busy = false, counted = false, lastUser = null;
+  const inp = h('input', { class: 'tin', type: 'text', placeholder: LANGS[S.lang].name + ' yaz…', autocomplete: 'off', autocapitalize: 'off', lang: S.lang, style: 'margin:0;font-size:16px;font-weight:500;padding:11px' });
+  const scroll = () => window.scrollTo(0, document.body.scrollHeight);
+  const addAi = r => {
+    const b = h('div', { class: 'bub A' }, h('span', { class: 't1' }, r.reply), tl(r.reply), h('span', { class: 't2', hidden: true }, r.tr),
+      h('span', { class: 'row', style: 'margin-top:6px;gap:6px' }, spk(r.reply), h('button', { class: 'btn small ghost', onclick: e => { const t = e.currentTarget.closest('.bub').querySelector('.t2'); t.hidden = !t.hidden; } }, 'Çeviri')));
+    log.append(b); scroll();
+  };
+  const turn = async () => {
+    busy = true;
+    const wait = h('div', { class: 'bub A mut' }, 'yazıyor…'); log.append(wait); scroll();
+    try {
+      const r = await aiCall('chat', { scenario: sc.p, history: hist });
+      wait.remove();
+      if (r.fix && lastUser) lastUser.after(h('div', { class: 'fixbox' }, h('b', null, '✏️ Doğrusu: '), r.fix, tl(r.fix), r.note ? h('div', { class: 'mut', style: 'margin-top:3px' }, r.note) : null));
+      else if (lastUser) lastUser.append(h('span', { class: 't2', style: 'color:var(--good)' }, '✓ doğru'));
+      hist.push({ r: 'a', t: r.reply }); addAi(r); say(r.reply);
+    } catch (e) {
+      wait.remove();
+      if (e.message === 'kod') return go('ai');
+      log.append(h('div', { class: 'fixbox', style: 'background:var(--badbg)' }, aiMsg(e), ' ', h('button', { class: 'btn small ghost', onclick: ev => { ev.currentTarget.parentNode.remove(); turn(); } }, 'Tekrar dene')));
+    }
+    busy = false;
+  };
+  const send = () => {
+    const t = inp.value.trim(); if (!t || busy) return;
+    inp.value = ''; hist.push({ r: 'u', t });
+    lastUser = h('div', { class: 'bub B' }, h('span', { class: 't1' }, t)); log.append(lastUser);
+    addXp(5); if (!counted) { counted = true; bump('speak'); }
+    turn();
+  };
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
+  const SR = getSR(); let rec = null;
+  const mic = SR ? h('button', { class: 'cbtn', title: 'Konuş' }, '🎤') : null;
+  if (mic) mic.onclick = () => {
+    if (rec) { try { rec.stop(); } catch (e) {} return; }
+    stopAudio();
+    try { rec = new SR(); rec.lang = LANGS[S.lang].sr; rec.maxAlternatives = 1; rec.interimResults = false; } catch (e) { return; }
+    mic.classList.add('on');
+    rec.onresult = e => { inp.value = e.results[0][0].transcript; send(); };
+    rec.onerror = () => {};
+    rec.onend = () => { mic.classList.remove('on'); rec = null; };
+    try { rec.start(); } catch (e) { mic.classList.remove('on'); rec = null; }
+  };
+  const kb = S.lang === 'ka' ? kaKeys(inp) : null; if (kb) kb.hidden = true;
+  page(sc.e + ' ' + sc.t, 'ai',
+    h('p', { class: 'mut', style: 'margin:0 4px' }, sc.s + '. Takıldığında “Çeviri”ye dokun.'), log,
+    h('div', { class: 'composer' }, kb, h('div', { class: 'row', style: 'gap:6px' }, inp, kb ? h('button', { class: 'cbtn', title: 'Gürcü klavyesi', onclick: () => { kb.hidden = !kb.hidden; } }, 'ქ') : null, mic, h('button', { class: 'cbtn go', onclick: send }, '➤'))));
+  turn();
+};
+
+// ── yapay zekâ: günün yazı görevi
+let taskShift = 0;
+V.yaz = () => {
+  if (!S.aiCode) return go('ai');
+  const tasks = WRITE_TASKS[P().level] || WRITE_TASKS[1], task = tasks[(dayNum() + taskShift) % tasks.length];
+  const ta = h('textarea', { class: 'tin', rows: '6', placeholder: LANGS[S.lang].name + ' yaz… (en az 2-3 cümle)', lang: S.lang, autocapitalize: 'sentences', style: 'font-size:16.5px;font-weight:500;resize:vertical' });
+  const out = h('div'), btn = h('button', { class: 'btn block' }, 'Gönder ve düzelttir');
+  const kb = S.lang === 'ka' ? kaKeys(ta) : null;
+  btn.onclick = async () => {
+    const text = ta.value.trim();
+    if (text.length < 12) { put(out, h('p', { class: 'hint' }, 'Biraz daha yaz: en az iki cümle.')); return; }
+    btn.disabled = true; btn.textContent = 'İnceleniyor…';
+    try {
+      const r = await aiCall('write', { prompt: task, text });
+      P().wr = { d: dayNum(), score: r.score }; addXp(30); bump('write');
+      put(out,
+        h('div', { class: 'card center' }, h('div', { style: 'font-size:44px;font-weight:800;color:' + (r.score >= 75 ? 'var(--good)' : r.score >= 45 ? 'var(--gold)' : 'var(--bad)') }, r.score), h('div', { class: 'mut' }, '100 üzerinden'), r.praise ? h('p', { style: 'margin-top:8px' }, r.praise) : null),
+        r.errors.length ? h('div', { class: 'card' }, h('h3', null, '✏️ Hataların'), r.errors.map(e => h('div', { class: 'trow', style: 'display:block' }, h('div', null, h('span', { style: 'color:var(--bad);text-decoration:line-through' }, e.wrong), '  →  ', h('b', { style: 'color:var(--good)' }, e.right)), h('div', { class: 'mut' }, e.why)))) : h('div', { class: 'card' }, h('h3', null, '✅ Hata bulunmadı')),
+        h('div', { class: 'card' }, h('h3', null, 'Düzeltilmiş hali'), h('p', { style: 'margin-top:6px;font-size:16.5px' }, r.corrected, tl(r.corrected)), spk(r.corrected)),
+        r.natural ? h('div', { class: 'card' }, h('h3', null, '🌟 Daha doğal hali'), h('p', { style: 'margin-top:6px;font-size:16.5px' }, r.natural, tl(r.natural)), spk(r.natural), h('p', { class: 'mut', style: 'margin-top:6px' }, 'Bu hali sesli oku ve bir kez de kendin yaz.')) : null,
+        r.tip ? h('div', { class: 'card' }, h('h3', null, '🎯 Sıradaki adım'), h('p', { style: 'margin-top:6px' }, r.tip)) : null);
+      out.scrollIntoView({ behavior: 'smooth' });
+    } catch (e) {
+      if (e.message === 'kod') return go('ai');
+      put(out, h('p', { class: 'hint' }, aiMsg(e)));
+    }
+    btn.disabled = false; btn.textContent = 'Gönder ve düzelttir';
+  };
+  page('Günün yazı görevi', 'ai',
+    h('div', { class: 'card' }, h('div', { class: 'row' }, lvBadge(P().level), h('span', { class: 'mut grow' }, LANGS[S.lang].name + ' yaz'), h('button', { class: 'btn small ghost', onclick: () => { taskShift++; route(); } }, 'Başka görev')),
+      h('p', { style: 'margin-top:8px;font-size:17px;font-weight:700' }, task)),
+    ta, kb, btn, h('div', { style: 'height:12px' }), out);
+};
+
+// ── Türklere özel tuzaklar
+V.traps = () => {
+  const list = TRAPS[S.lang] || [];
+  page(S.lang === 'en' ? 'Türklere özel tuzaklar' : 'Gürcücede dikkat edilecekler', 'learn',
+    h('p', { class: 'mut', style: 'margin:0 4px 10px' }, 'Türkçe konuşanların en sık yaptığı hatalar: önce nedenini oku, sonra mini testle pekiştir.'),
+    h('div', { class: 'list' }, list.map(t => item(t.e, t.title, t.sub + (P().done['t:' + t.id] ? ' · ✓' : ''), '#trap/' + t.id))));
+};
+V.trap = id => {
+  const t = (TRAPS[S.lang] || []).find(x => x.id === id); if (!t) return go('traps');
+  const done = () => { P().done['t:' + t.id] = 1; save(); };
+  page(t.title, 'traps',
+    h('div', { class: 'card' }, t.body.map((b, k) => h('p', { style: k ? 'margin-top:10px' : '' }, b))),
+    h('div', { class: 'card' }, h('h3', null, 'Yanlış → Doğru'), t.ex.map(e => h('div', { class: 'trow', style: 'display:block' },
+      h('div', { style: 'color:var(--bad)' }, '✗ ', e[0]), h('div', { style: 'color:var(--good);font-weight:700' }, '✓ ', e[1]), h('div', { class: 'mut' }, e[2])))),
+    h('div', { class: 'row wrap' },
+      h('button', { class: 'btn grow', onclick: () => runSession({ title: t.title, back: 'trap/' + t.id, bonus: 20, kind: 'trap', steps: t.q.map(q => ({ type: 'q', label: 'Doğrusunu seç', ...q })), onDone: done }) }, 'Mini test'),
+      t.say ? h('button', { class: 'btn ghost grow', onclick: () => runSession({ title: 'Telaffuz · ' + t.title, back: 'trap/' + t.id, noRetry: true, bonus: 20, kind: 'speak', steps: t.say.map(s => ({ type: 'speak', it: { [S.lang]: s[0], tr: s[1] } })), onDone: done }) }, '🎤 Telaffuz pratiği') : null));
+};
+
+// ── en çok yanlış yapılan kelimeler
+const hardWords = () => W().filter(w => (P().srs[w.id] || {}).x >= 2).sort((a, b) => P().srs[b.id].x - P().srs[a.id].x);
+function startHard() {
+  const ws = hardWords().slice(0, 12);
+  if (!ws.length) return;
+  runSession({ title: 'Zorlandığın kelimeler', back: 'learn', srs: true, bonus: 20, kind: 'review',
+    steps: ws.flatMap(w => [{ type: 'word2tr', it: w }, { type: canSpell(w) ? 'spell' : 'listen', it: w }]),
+    onDone: res => { if (res.pct >= 80) ws.forEach(w => { const s = P().srs[w.id]; if (s && s.x) s.x--; }); save(); } });
+}
+
 // kısayol rotaları
 V.yorum = () => page('Koçun yorumu · ' + LANGS[S.lang].name, 'me', coach());
 V.lesson = startLesson; V.test = startTest; V.review = startReview;
 V.memory = gameMemory; V.speed = gameSpeed;
 
 // ───────────────────────── yönlendirme ─────────────────────────
-const TABS = { home: 'home', learn: 'learn', words: 'learn', cat: 'learn', abc: 'learn', read: 'learn', story: 'learn', games: 'games', memory: 'games', speed: 'games', listen: 'listen', dlg: 'listen', pod: 'listen', me: 'me', yorum: 'me' };
+const TABS = { home: 'home', learn: 'learn', words: 'learn', cat: 'learn', abc: 'learn', read: 'learn', story: 'learn', games: 'games', memory: 'games', speed: 'games', listen: 'listen', dlg: 'listen', pod: 'listen', me: 'me', yorum: 'me', ai: 'learn', chat: 'learn', yaz: 'learn', traps: 'learn', trap: 'learn' };
 function route() {
   endSession(); stopAudio(); clearInterval(speedTimer);
   const raw = location.hash.slice(1) || 'home', ix = raw.indexOf('/');
