@@ -777,14 +777,39 @@ function gameSpeed() {
 }
 
 // ── dinleme
+const CATS = { haber: ['📰', 'Haberler'], hikaye: ['📚', 'Hikâyeler'], ders: ['🎓', 'Dersler'], sohbet: ['💬', 'Sohbet'] };
+let podCat = 'all';
+const epMeta = e => [e.d ? new Date(e.d + 'T12:00:00').toLocaleDateString('tr-TR', { day: 'numeric', month: 'short' }) : '', /^\d+$/.test(e.m) ? Math.max(1, Math.round(e.m / 60)) + ' dk' : e.m].filter(Boolean).join(' · ');
 V.listen = () => {
-  const pods = PODCASTS.map((p, k) => ({ ...p, k })).filter(p => p.lang === S.lang);
-  put(view, 
+  const lv = P().level;
+  const pods = PODCASTS.map((p, k) => ({ ...p, k, cat: p.cat || 'ders' })).filter(p => p.lang === S.lang);
+  // bugün için öneri: seviyeye en yakın haber + hikâye
+  const best = cat => pods.filter(p => p.cat === cat && p.eps.length).sort((x, y) => (Math.abs(x.l - lv) + (x.l > lv ? .5 : 0)) - (Math.abs(y.l - lv) + (y.l > lv ? .5 : 0)) || (y.eps[0].d > x.eps[0].d ? 1 : -1))[0];
+  const sug = ['haber', 'hikaye'].map(best).filter(Boolean);
+  const sugCard = sug.length ? h('div', { class: 'card' }, h('div', { class: 'mut', style: 'font-weight:700;margin-bottom:6px' }, 'BUGÜN İÇİN ÖNERİ · ' + LV[lv] + ' SEVİYEN'),
+    sug.map(p => h('button', { class: 'trow', style: 'width:100%;text-align:left', onclick: () => openPlayer(p.eps[0].t, p.eps[0].u) },
+      h('span', { style: 'font-size:24px' }, CATS[p.cat][0]), h('span', { class: 'grow' }, h('b', { style: 'display:block;font-size:14.5px' }, p.eps[0].t), h('small', { class: 'mut' }, p.name + ' · ' + epMeta(p.eps[0]))), lvBadge(p.l), h('span', { style: 'font-size:20px' }, '▶️')))) : null;
+  const listBox = h('div');
+  const chips = h('div', { class: 'ctrl', style: 'margin:0 0 10px' });
+  const paint = () => {
+    put(chips, [['all', '🎧', 'Tümü'], ...Object.entries(CATS).map(([k, v]) => [k, v[0], v[1]])].filter(c => c[0] === 'all' || pods.some(p => p.cat === c[0]))
+      .map(c => h('button', { class: 'btn small' + (podCat === c[0] ? '' : ' ghost'), onclick: () => { podCat = c[0]; paint(); } }, c[1] + ' ' + c[2])));
+    const shown = pods.filter(p => podCat === 'all' || p.cat === podCat).sort((x, y) => x.l - y.l || Object.keys(CATS).indexOf(x.cat) - Object.keys(CATS).indexOf(y.cat));
+    const row = p => item(CATS[p.cat][0], p.name, p.by + ' · ' + p.note, '#pod/' + p.k, h('span', { class: 'row' }, lvBadge(p.l), h('span', { class: 'chev' }, '›')));
+    const fit = shown.filter(p => p.l <= lv), hard = shown.filter(p => p.l > lv);
+    put(listBox,
+      fit.length ? [h('p', { class: 'mut', style: 'margin:0 4px 6px;font-weight:700' }, '✅ Seviyene uygun'), h('div', { class: 'list' }, fit.map(row))] : null,
+      hard.length ? [h('p', { class: 'mut', style: 'margin:14px 4px 6px;font-weight:700' }, fit.length ? '🧗 Bir üst seviye — zorlayıcı' : '🧗 Seviyenin üstünde — kulak alıştırmak için'), h('div', { class: 'list' }, hard.map(row))] : null,
+      !shown.length ? h('p', { class: 'hint' }, 'Bu türde podcast yok.') : null);
+  };
+  paint();
+  put(view,
+    sugCard,
+    h('h2', { class: 'sec' }, 'Profesyonel podcast’ler'),
+    chips, listBox,
     h('h2', { class: 'sec' }, 'Mini podcast dersleri'),
     h('p', { class: 'mut', style: 'margin:0 4px 8px' }, 'Yöntem: önce metne bakmadan dinle → sonra metinle dinle → en son sesli tekrar et.'),
-    h('div', { class: 'list' }, DIALOGUES.map(d => item(d.e, d.title, d.lines.length + ' replik' + (P().done['d:' + d.id] ? ' · ✓ dinlendi' : ''), '#dlg/' + d.id, h('span', { class: 'row' }, lvBadge(d.l), h('span', { class: 'chev' }, '›'))))),
-    h('h2', { class: 'sec' }, 'Gerçek podcast’ler'),
-    h('div', { class: 'list' }, pods.map(p => item('🎙️', p.name, p.by + ' · ' + p.note, '#pod/' + p.k, h('span', { class: 'row' }, lvBadge(p.l), h('span', { class: 'chev' }, '›'))))));
+    h('div', { class: 'list' }, DIALOGUES.map(d => item(d.e, d.title, d.lines.length + ' replik' + (P().done['d:' + d.id] ? ' · ✓ dinlendi' : ''), '#dlg/' + d.id, h('span', { class: 'row' }, lvBadge(d.l), h('span', { class: 'chev' }, '›'))))));
 };
 V.dlg = id => {
   const d = DIALOGUES.find(x => x.id === id); if (!d) return go('listen');
@@ -832,9 +857,9 @@ function openPlayer(title, url) {
 V.pod = k => {
   const p = PODCASTS[+k]; if (!p) return go('listen');
   page(p.name, 'listen',
-    h('div', { class: 'card' }, h('div', { class: 'row' }, lvBadge(p.l), h('b', { class: 'grow' }, p.by)), h('p', { class: 'mut', style: 'margin-top:6px' }, p.note),
+    h('div', { class: 'card' }, h('div', { class: 'row' }, lvBadge(p.l), h('span', { class: 'badge g' }, (CATS[p.cat] || CATS.ders).join(' ')), h('b', { class: 'grow' }, p.by)), h('p', { class: 'mut', style: 'margin-top:6px' }, p.note),
       h('a', { class: 'btn small ghost', style: 'margin-top:10px', href: p.web, target: '_blank', rel: 'noopener' }, 'Tüm bölümler ↗')),
-    h('div', { class: 'list' }, p.eps.map(e => h('button', { class: 'item', onclick: () => openPlayer(e.t, e.u) }, h('span', { class: 'ic' }, '▶️'), h('span', { class: 'grow' }, h('b', null, e.t), h('small', null, [e.d, /^d+$/.test(e.m) ? Math.max(1, Math.round(e.m / 60)) + ' dk' : e.m].filter(Boolean).join(' · ')))))));
+    h('div', { class: 'list' }, p.eps.map(e => h('button', { class: 'item', onclick: () => openPlayer(e.t, e.u) }, h('span', { class: 'ic' }, '▶️'), h('span', { class: 'grow' }, h('b', null, e.t), h('small', null, epMeta(e)))))));
 };
 
 // ── gelişim / ayarlar

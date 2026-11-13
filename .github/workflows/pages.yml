@@ -3,7 +3,7 @@ on:
   push:
     branches: [main]
   schedule:
-    - cron: '0 3 * * 1'   # her Pazartesi: podcast bölümlerini yenile
+    - cron: '30 3,15 * * *'   # günde iki kez: haber ve hikâye bölümlerini yenile
   workflow_dispatch:
 permissions:
   contents: read
